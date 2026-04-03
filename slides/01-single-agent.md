@@ -809,8 +809,8 @@ cot_improve = ChatPromptTemplate.from_messages([
 
 ```python
 from langchain.agents import create_agent
-from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import AIMessage
+from langgraph.checkpoint.memory import MemorySaver
 import json
 
 memory = MemorySaver()
