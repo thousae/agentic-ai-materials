@@ -214,7 +214,7 @@ from langchain_openai import ChatOpenAI
 
 # OPENAI_API_KEY 환경 변수를 자동으로 사용
 llm = ChatOpenAI(
-    model="gpt-4o",
+    model="gpt-5.4-nano",
     temperature=0.7
 )
 
