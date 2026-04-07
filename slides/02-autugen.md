@@ -41,12 +41,28 @@ Microsoft AutoGen 기반 멀티 에이전트 시스템 구축
 </div>
 </div>
 
-### Part 3: 실전 심화
+<div class="columns">
+<div>
+
+### Part 3: 실전 심화 (1)
 
 7. Tool Use (도구 사용)
-8. Human-in-the-Loop (사람 개입)
-9. Termination 조건
-10. 통합 실습
+8. FunctionTool과 고급 도구 패턴
+9. Human-in-the-Loop (사람 개입)
+10. Termination 조건
+
+</div>
+<div>
+
+### Part 3: 실전 심화 (2)
+
+11. 에이전트 상태 저장과 복원
+12. 디버깅과 모니터링
+13. 통합 실습: 코드 리뷰 에이전트 팀
+14. 실전 팁과 베스트 프랙티스
+
+</div>
+</div>
 
 ---
 
@@ -467,7 +483,7 @@ await Console(team.run_stream(
 
 ```python
 from typing import Sequence
-from autogen_agentchat.base import BaseAgentEvent, BaseChatMessage
+from autogen_agentchat.messages import BaseAgentEvent, BaseChatMessage
 
 def custom_selector(messages: Sequence[BaseAgentEvent | BaseChatMessage]) -> str | None:
     """항상 Planner를 거치도록 커스텀 라우팅"""
@@ -665,7 +681,7 @@ async def calculate(expression: str) -> str:
 
 ---
 
-# AutoGen에서서의 Tool 정의 (계속)
+# Agent에 Tool 등록
 
 ```python
 # Agent에 도구 등록
@@ -677,6 +693,15 @@ agent = AssistantAgent(
     reflect_on_tool_use=True,    # 도구 결과를 자연어로 정리
 )
 ```
+
+### `reflect_on_tool_use` 옵션
+
+| 값        | 동작                                    |
+| --------- | --------------------------------------- |
+| `False`   | 도구 결과를 **그대로** 메시지로 반환     |
+| `True`    | LLM이 도구 결과를 **자연어로 정리**하여 반환 |
+
+> `True`로 설정하면 LLM 호출이 1회 추가되지만, 사용자 친화적인 응답 생성
 
 ---
 
@@ -710,11 +735,209 @@ agent = AssistantAgent(
 
 ---
 
+# 실전 Tool 예시: 웹 검색 + DB 조회
+
+```python
+import httpx
+
+async def search_web(query: str) -> str:
+    """웹에서 정보를 검색합니다."""
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            "https://api.search.example.com/search",
+            params={"q": query, "limit": 3},
+        )
+        results = resp.json()["results"]
+        return "\n".join(f"- {r['title']}: {r['snippet']}" for r in results)
+
+async def query_database(sql: str) -> str:
+    """읽기 전용 SQL 쿼리를 실행합니다. SELECT만 허용됩니다."""
+    if not sql.strip().upper().startswith("SELECT"):
+        return "오류: SELECT 쿼리만 허용됩니다."
+    # 실제 DB 연결 로직
+    return f"쿼리 결과: [{sql}] 실행 완료 - 3건 조회"
+```
+
+> 도구의 **독스트링**이 LLM에게 도구 설명으로 전달됨 - 명확하게 작성할수록 정확한 호출
+
+---
+
+# Team에서 Tool 공유 vs 전담
+
+<div class="columns">
+<div>
+
+### 전략 A: Tool 전담 Agent
+
+```python
+searcher = AssistantAgent(
+    "Searcher",
+    tools=[search_web],
+    model_client=model_client,
+    system_message="검색 전문가입니다.",
+)
+analyst = AssistantAgent(
+    "Analyst",
+    tools=[query_database, calculate],
+    model_client=model_client,
+    system_message="데이터 분석가입니다.",
+)
+```
+
+각 Agent가 특정 도구만 담당
+
+</div>
+<div>
+
+### 전략 B: 범용 Agent
+
+```python
+generalist = AssistantAgent(
+    "Generalist",
+    tools=[
+        search_web,
+        query_database,
+        calculate,
+    ],
+    model_client=model_client,
+    system_message="모든 도구를 활용하세요.",
+)
+```
+
+하나의 Agent가 모든 도구 사용
+
+</div>
+</div>
+
+> 일반적으로 **전략 A**(전담)가 역할이 명확하고 디버깅이 쉬움
+
+---
+
 <!-- _class: section-divider -->
 <!-- _paginate: false -->
 <!-- _footer: "" -->
 
 # 08
+
+## FunctionTool과 고급 도구 패턴
+
+---
+
+# FunctionTool 클래스
+
+함수를 도구로 래핑하여 _스키마를 세밀하게 제어_
+
+```python
+from autogen_core.tools import FunctionTool
+
+async def translate(text: str, target_lang: str) -> str:
+    """텍스트를 대상 언어로 번역합니다."""
+    return f"[{target_lang}] {text} 번역 완료"
+
+# FunctionTool로 래핑 - 이름과 설명 커스터마이즈 가능
+translate_tool = FunctionTool(
+    func=translate,
+    name="translate_text",                       # 커스텀 이름
+    description="텍스트를 지정된 언어로 번역합니다. "
+                "target_lang은 ISO 639-1 코드(ko, en, ja 등)를 사용합니다.",
+)
+
+agent = AssistantAgent(
+    name="translator",
+    model_client=model_client,
+    tools=[translate_tool],                      # FunctionTool 객체 전달
+)
+```
+
+---
+
+# FunctionTool vs 함수 직접 전달
+
+| 항목           | 함수 직접 전달         | FunctionTool                     |
+| -------------- | ---------------------- | -------------------------------- |
+| **이름**       | 함수명 자동 사용       | `name` 파라미터로 커스터마이즈     |
+| **설명**       | 독스트링 자동 사용     | `description`으로 상세 설명 가능  |
+| **스키마**     | 타입 힌트에서 자동 추론 | 동일 (자동 추론)                  |
+| **사용 시점**  | 빠른 프로토타이핑      | 프로덕션, 설명이 중요한 도구      |
+
+```python
+# 간단한 도구 → 함수 직접 전달
+agent = AssistantAgent("a", tools=[get_weather], model_client=model_client)
+
+# 정교한 도구 → FunctionTool 사용
+weather_tool = FunctionTool(
+    func=get_weather,
+    name="check_current_weather",
+    description="실시간 날씨를 조회합니다. city는 한글 도시명(예: 서울, 부산)을 사용합니다.",
+)
+agent = AssistantAgent("a", tools=[weather_tool], model_client=model_client)
+```
+
+---
+
+<style scoped>
+  pre { font-size: 0.62em; }
+</style>
+
+# 도구 에러 처리 패턴
+
+도구 실행 실패 시 _에러 메시지를 반환_하면 LLM이 대처 가능
+
+```python
+import httpx
+
+async def fetch_stock_price(ticker: str) -> str:
+    """주식 종목의 현재 가격을 조회합니다. ticker는 영문 심볼(예: AAPL, TSLA)입니다."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"https://api.example.com/stock/{ticker}")
+            resp.raise_for_status()
+            data = resp.json()
+            return f"{ticker}: ${data['price']:.2f} ({data['change']:+.2f}%)"
+    except httpx.TimeoutException:
+        return f"오류: {ticker} 가격 조회 시 타임아웃이 발생했습니다. 잠시 후 다시 시도해주세요."
+    except httpx.HTTPStatusError as e:
+        return f"오류: {ticker} 조회 실패 (HTTP {e.response.status_code}). 심볼을 확인해주세요."
+    except Exception as e:
+        return f"오류: 예상치 못한 문제가 발생했습니다 - {str(e)}"
+```
+
+> 예외를 **raise 하지 말고** 문자열로 반환 → LLM이 오류를 이해하고 다음 행동 결정
+
+---
+
+# 도구 조합 패턴: 파이프라인
+
+여러 도구를 _순차적으로 호출_하는 워크플로우 구성
+
+```
+사용자: "AAPL 주가를 조회하고 한국어로 요약해줘"
+    │
+    ↓
+┌───────────────┐  tool call 1      ┌────────────────┐
+│ AssistantAgent│ ─────────────────→ │fetch_stock_price│
+│               │                   │("AAPL")         │
+│               │ ←──────────────── │→ "AAPL: $198.50"│
+│               │                   └────────────────┘
+│               │  tool call 2      ┌────────────────┐
+│               │ ─────────────────→ │  translate     │
+│               │                   │("AAPL: $198",  │
+│               │ ←──────────────── │ "ko")           │
+│               │                   └────────────────┘
+│               │
+│  reflect: "애플 주가는 198.50달러입니다."
+└───────────────┘
+```
+
+> Agent가 도구 결과를 보고 **자율적으로** 다음 도구 호출 여부를 판단
+
+---
+
+<!-- _class: section-divider -->
+<!-- _paginate: false -->
+<!-- _footer: "" -->
+
+# 09
 
 ## Human-in-the-Loop (사람 개입)
 
@@ -765,7 +988,7 @@ while True:
 
 ---
 
-# Human-in-the-Loop 실습
+# Human-in-the-Loop: 대화 중 개입 실습
 
 ```python
 from autogen_agentchat.agents import AssistantAgent, UserProxyAgent
@@ -792,11 +1015,70 @@ await Console(team.run_stream(task="바다를 주제로 4줄 시를 써줘"))
 
 ---
 
+# Human-in-the-Loop: Swarm에서의 사용자 핸드오프
+
+Swarm 패턴에서 _사용자 확인이 필요한 시점에 자동 핸드오프_
+
+```python
+from autogen_agentchat.agents import UserProxyAgent
+
+user = UserProxyAgent("user", input_func=input)
+
+order_agent = AssistantAgent(
+    "order_agent",
+    model_client=model_client,
+    handoffs=["payment_agent", "user"],    # 사용자에게도 핸드오프 가능
+    system_message="""주문을 처리합니다. 결제 전 반드시 user에게 핸드오프하여
+    주문 내용을 확인받으세요.""",
+)
+
+payment_agent = AssistantAgent(
+    "payment_agent",
+    model_client=model_client,
+    handoffs=["order_agent", "user"],
+    tools=[process_payment],
+    system_message="결제를 처리합니다.",
+)
+```
+
+> 중요한 결정(결제, 삭제 등) 전에 **사용자 승인**을 받는 안전한 패턴
+
+---
+
+# Human-in-the-Loop 실행 흐름 (Swarm)
+
+```
+사용자: "노트북 1대 주문해줘"
+    │
+    ↓
+┌──────────────┐  "주문 내용: 노트북 1대, 1,200,000원"
+│ order_agent  │ ─→ HandoffMessage(target="user")   ← 확인 요청
+└──────────────┘
+    │
+    ↓  사용자: "네, 진행해주세요"
+    │
+┌──────────────┐  "결제를 진행합니다"
+│ order_agent  │ ─→ HandoffMessage(target="payment_agent")
+└──────────────┘
+    │
+    ↓
+┌───────────────┐  process_payment() 호출
+│ payment_agent │ ─→ HandoffMessage(target="order_agent")
+└───────────────┘
+    │
+    ↓
+┌──────────────┐  "주문이 완료되었습니다. TERMINATE"
+│ order_agent  │
+└──────────────┘
+```
+
+---
+
 <!-- _class: section-divider -->
 <!-- _paginate: false -->
 <!-- _footer: "" -->
 
-# 09
+# 10
 
 ## Termination 조건
 
@@ -856,6 +1138,33 @@ team = RoundRobinGroupChat([agent_a, agent_b], termination_condition=external)
 
 ---
 
+# Termination 설계 가이드
+
+### 왜 종료 조건이 중요한가?
+
+종료 조건 없이 실행하면 _무한 루프, 토큰 과다 소모, 비용 폭증_ 위험
+
+### 실전 설계 원칙
+
+```
+┌─────────────────────────────────────────────────┐
+│          Termination 조건 설계 체크리스트          │
+│                                                   │
+│  ✓ 정상 종료: TextMentionTermination("APPROVE")  │
+│    → Agent가 작업 완료를 명시적으로 선언            │
+│                                                   │
+│  ✓ 안전 장치: MaxMessageTermination(30)           │
+│    → 무한 루프 방지용 상한선                       │
+│                                                   │
+│  ✓ 시간 제한: TimeoutTermination(300)             │
+│    → 프로덕션 환경의 SLA 준수                      │
+│                                                   │
+│  항상 OR 조합으로 안전 장치를 포함하세요!           │
+└─────────────────────────────────────────────────┘
+```
+
+---
+
 # Team 상태 관리
 
 ```python
@@ -881,37 +1190,214 @@ result = await Console(team.run_stream(task="새로운 작업을 시작합니다
 <!-- _paginate: false -->
 <!-- _footer: "" -->
 
-# 10
+# 11
 
-## 통합 실습
-
----
-
-# 실습: 리서치 에이전트 팀 구축
-
-### 시나리오
-
-> "AI 기술 동향을 조사하고 보고서를 작성하는 에이전트 팀"
-
-```
-┌──────────────────────────────────────────────┐
-│            SelectorGroupChat                  │
-│                                               │
-│  ┌──────────┐  ┌──────────┐  ┌────────────┐ │
-│  │ Planner  │  │Researcher│  │   Writer   │ │
-│  │ 작업 계획 │  │ 정보 검색 │  │  보고서 작성 │ │
-│  └──────────┘  └──────────┘  └────────────┘ │
-│                                               │
-│  ┌──────────┐                                │
-│  │  Critic  │  → "APPROVE" 시 종료            │
-│  │ 품질 검토 │                                │
-│  └──────────┘                                │
-└──────────────────────────────────────────────┘
-```
+## 에이전트 상태 저장과 복원
 
 ---
 
-# 통합 실습 코드 (1/3)
+# 왜 상태 저장이 필요한가?
+
+프로덕션 환경에서 _장기 실행 에이전트의 상태를 보존_
+
+```
+┌─────────────┐     저장      ┌─────────────┐
+│  실행 중인   │ ──────────→  │   JSON 파일  │
+│  Team 상태   │              │  또는 DB     │
+└─────────────┘              └──────┬──────┘
+                                    │
+                              복원  │
+                                    ↓
+                             ┌─────────────┐
+                             │  새 세션에서  │
+                             │  대화 재개    │
+                             └─────────────┘
+```
+
+### 활용 시나리오
+
+- 서버 재시작 후 대화 재개
+- 긴 작업을 여러 세션에 걸쳐 수행
+- 체크포인트 기반 복구
+
+---
+
+# Team 상태 저장/복원
+
+```python
+import json
+
+# 1. Team 실행
+team = RoundRobinGroupChat([writer, critic], termination_condition=termination)
+result = await Console(team.run_stream(task="AI 윤리에 대한 에세이를 써줘"))
+
+# 2. 상태 저장
+state = await team.save_state()
+with open("team_state.json", "w") as f:
+    json.dump(state, f, ensure_ascii=False)
+
+# 3. 상태 복원 (새 세션에서)
+team2 = RoundRobinGroupChat([writer, critic], termination_condition=termination)
+with open("team_state.json", "r") as f:
+    state = json.load(f)
+await team2.load_state(state)
+
+# 4. 이전 대화 이어서 진행
+result = await Console(team2.run_stream(task="결론 부분을 보강해줘"))
+```
+
+---
+
+# Agent 단위 상태 저장/복원
+
+```python
+# 개별 Agent의 상태도 독립적으로 저장 가능
+agent_state = await writer.save_state()
+
+# 새 Agent 인스턴스에 상태 복원
+new_writer = AssistantAgent(
+    "writer",
+    model_client=model_client,
+    system_message="당신은 창의적인 작가입니다.",
+)
+await new_writer.load_state(agent_state)
+```
+
+### 상태에 포함되는 것
+
+| 포함됨                | 포함되지 않음        |
+| --------------------- | -------------------- |
+| 대화 히스토리 (메시지) | `model_client` 설정   |
+| 모델 컨텍스트         | 도구 함수 정의       |
+| 에이전트 내부 상태     | `system_message`     |
+
+> 복원 시 Agent 설정(model_client, tools, system_message)은 동일하게 생성해야 함
+
+---
+
+<!-- _class: section-divider -->
+<!-- _paginate: false -->
+<!-- _footer: "" -->
+
+# 12
+
+## 디버깅과 모니터링
+
+---
+
+# 로깅 설정
+
+AutoGen의 내부 동작을 _로그로 추적_하여 디버깅
+
+```python
+import logging
+
+# AutoGen 전체 로깅 활성화
+logging.basicConfig(level=logging.WARNING)
+logging.getLogger("autogen_agentchat").setLevel(logging.DEBUG)
+logging.getLogger("autogen_core").setLevel(logging.DEBUG)
+```
+
+### 주요 로그 포인트
+
+| 로그 레벨 | 내용                             |
+| --------- | -------------------------------- |
+| `DEBUG`   | 메시지 송수신, 도구 호출 상세    |
+| `INFO`    | Agent 선택, 핸드오프 이벤트     |
+| `WARNING` | Termination 트리거, 재시도       |
+| `ERROR`   | LLM 호출 실패, 도구 실행 오류   |
+
+---
+
+# 실행 결과 분석
+
+`TaskResult` 객체에서 _전체 대화 흐름을 분석_
+
+```python
+result = await team.run(task="보고서를 작성해줘")
+
+# 전체 메시지 히스토리 확인
+for msg in result.messages:
+    print(f"[{msg.source}] {type(msg).__name__}: {msg.content[:80]}...")
+
+# 종료 사유 확인
+print(f"종료 사유: {result.stop_reason}")
+```
+
+### 출력 예시
+
+```
+[user]       TextMessage:    보고서를 작성해줘
+[Planner]    TextMessage:    작업을 분해하겠습니다. 1) 자료 조사 2) 초안 작성...
+[Researcher] TextMessage:    조사 결과: AI 시장 규모는 2025년 기준...
+[Writer]     TextMessage:    ## AI 기술 동향 보고서...
+[Critic]     TextMessage:    APPROVE - 잘 작성되었습니다.
+종료 사유: Text 'APPROVE' mentioned
+```
+
+---
+
+# 토큰 사용량 추적
+
+비용 관리를 위한 _토큰 사용량 모니터링_
+
+```python
+result = await team.run(task="보고서를 작성해줘")
+
+# 메시지별 토큰 사용량 확인
+for msg in result.messages:
+    if hasattr(msg, "models_usage") and msg.models_usage:
+        usage = msg.models_usage
+        print(f"[{msg.source}] "
+              f"입력: {usage.prompt_tokens}, "
+              f"출력: {usage.completion_tokens}")
+```
+
+### 비용 최적화 팁
+
+- `MaxMessageTermination`으로 **상한선** 설정
+- 불필요한 Agent 참여 방지 → `selector_func` 활용
+- `system_message`를 간결하게 → 매 턴마다 전송되므로 토큰 누적
+
+---
+
+<!-- _class: section-divider -->
+<!-- _paginate: false -->
+<!-- _footer: "" -->
+
+# 13
+
+## 통합 실습: 코드 리뷰 에이전트 팀
+
+---
+
+# 실습 시나리오
+
+> "코드를 분석하고 리뷰 의견을 제공하는 멀티 에이전트 팀"
+
+```
+┌───────────────────────────────────────────────────────┐
+│              SelectorGroupChat                         │
+│                                                        │
+│  ┌────────────┐  ┌──────────────┐  ┌───────────────┐ │
+│  │  Architect  │  │SecurityReview│  │CodeOptimizer │ │
+│  │  구조 분석   │  │  보안 검토    │  │  성능 최적화   │ │
+│  └────────────┘  └──────────────┘  └───────────────┘ │
+│                                                        │
+│  ┌────────────┐                                       │
+│  │ Summarizer │  → "REVIEW_COMPLETE" 시 종료           │
+│  │ 종합 리뷰   │                                       │
+│  └────────────┘                                       │
+└───────────────────────────────────────────────────────┘
+```
+
+---
+
+<style scoped>
+  pre { font-size: 0.55em; }
+</style>
+
+# 코드 리뷰 팀 구현 (1/3): Tool 정의
 
 ```python
 import asyncio
@@ -923,73 +1409,222 @@ from autogen_ext.models.openai import OpenAIChatCompletionClient
 
 model_client = OpenAIChatCompletionClient(model="gpt-4o")
 
-planner = AssistantAgent(
-  "Planner",
-  description="작업을 계획하고 조율하는 에이전트. 새 작업 시 먼저 참여.",
-  model_client=model_client,
-  system_message="""작업을 분석하고 단계별 계획을 수립하세요.
-  각 단계를 적절한 전문가 에이전트에게 배정하세요.""",
+async def count_lines(code: str) -> str:
+    """코드의 줄 수와 함수 수를 분석합니다."""
+    lines = code.strip().split("\n")
+    func_count = sum(1 for line in lines if line.strip().startswith("def "))
+    class_count = sum(1 for line in lines if line.strip().startswith("class "))
+    return f"총 {len(lines)}줄, 함수 {func_count}개, 클래스 {class_count}개"
+
+async def check_security_patterns(code: str) -> str:
+    """코드에서 보안 취약점 패턴을 검사합니다."""
+    issues = []
+    if "eval(" in code: issues.append("eval() 사용 감지 - 코드 인젝션 위험")
+    if "exec(" in code: issues.append("exec() 사용 감지 - 코드 인젝션 위험")
+    if "password" in code.lower() and "=" in code: issues.append("하드코딩된 비밀번호 의심")
+    if "SELECT" in code and "+" in code: issues.append("SQL 인젝션 가능성")
+    return "\n".join(issues) if issues else "주요 보안 패턴 이슈 없음"
+```
+
+---
+
+<style scoped>
+  pre { font-size: 0.55em; }
+</style>
+
+# 코드 리뷰 팀 구현 (2/3): Agent 정의
+
+```python
+architect = AssistantAgent(
+    "Architect",
+    description="코드의 구조, 설계 패턴, 아키텍처를 분석하는 에이전트.",
+    model_client=model_client,
+    tools=[count_lines],
+    system_message="""코드의 구조적 품질을 분석하세요:
+    - SOLID 원칙 준수 여부, 함수/클래스 설계, 의존성 구조, 네이밍 컨벤션""",
+)
+security_reviewer = AssistantAgent(
+    "SecurityReviewer",
+    description="코드의 보안 취약점을 검토하는 에이전트.",
+    model_client=model_client,
+    tools=[check_security_patterns],
+    system_message="""코드의 보안 취약점을 검토하세요:
+    - 입력 검증, 인젝션 위험, 인증/인가, 민감 데이터 노출""",
+)
+optimizer = AssistantAgent(
+    "CodeOptimizer",
+    description="코드의 성능과 효율성을 개선하는 에이전트.",
+    model_client=model_client,
+    system_message="""코드의 성능 최적화 방안을 제시하세요:
+    - 시간/공간 복잡도, 불필요한 연산, 캐싱 기회, 알고리즘 개선""",
 )
 ```
 
 ---
 
-# 통합 실습 코드 (2/3)
+<style scoped>
+  pre { font-size: 0.55em; }
+</style>
+
+# 코드 리뷰 팀 구현 (3/3): Team 구성 및 실행
 
 ```python
-researcher = AssistantAgent(
-  "Researcher",
-  description="정보를 조사하고 사실을 수집하는 에이전트.",
-  model_client=model_client,
-  system_message="주어진 주제에 대해 상세한 정보를 조사하세요.",
+summarizer = AssistantAgent(
+    "Summarizer",
+    description="모든 리뷰 의견을 종합하여 최종 리뷰를 작성하는 에이전트.",
+    model_client=model_client,
+    system_message="""다른 에이전트들의 리뷰를 종합하여 최종 코드 리뷰를 작성하세요.
+    형식: ## 종합 코드 리뷰 / 심각도(상/중/하) 포함 / 개선 제안 포함
+    최종 리뷰 작성 완료 시 반드시 'REVIEW_COMPLETE'라고 마지막에 적으세요.""",
 )
 
-writer = AssistantAgent(
-  "Writer",
-  description="보고서를 작성하는 에이전트.",
-  model_client=model_client,
-  system_message="조사된 정보를 바탕으로 체계적인 보고서를 작성하세요.",
-)
-```
-
----
-
-# 통합 실습 코드 (3/3)
-
-```python
-critic = AssistantAgent(
-  "Critic",
-  description="결과물의 품질을 검토하는 에이전트.",
-  model_client=model_client,
-  system_message="""보고서를 검토하고 피드백을 제공하세요.
-  품질이 만족스러우면 'APPROVE'라고 응답하세요.""",
-)
-
-termination = TextMentionTermination("APPROVE") | MaxMessageTermination(30)
+termination = TextMentionTermination("REVIEW_COMPLETE") | MaxMessageTermination(20)
 
 team = SelectorGroupChat(
-  [planner, researcher, writer, critic],
-  model_client=model_client,
-  termination_condition=termination,
+    [architect, security_reviewer, optimizer, summarizer],
+    model_client=model_client,
+    termination_condition=termination,
 )
 
-asyncio.run(Console(team.run_stream(
-  task="2024-2025 생성형 AI 기술 동향 보고서를 작성해줘"
-)))
+code_to_review = """
+def get_user(user_id):
+    query = "SELECT * FROM users WHERE id = " + str(user_id)
+    result = eval(db.execute(query))
+    password = "admin123"
+    return result
+"""
+
+asyncio.run(Console(team.run_stream(task=f"다음 코드를 리뷰해주세요:\n```python\n{code_to_review}\n```")))
 ```
+
+---
+
+# 코드 리뷰 실행 흐름 예시
+
+```
+[Architect]       count_lines() 호출 → "총 5줄, 함수 1개"
+                  "단일 함수에 DB 조회 + 인증 로직이 혼재.
+                   관심사 분리(SoC) 원칙 위반."
+
+[SecurityReviewer] check_security_patterns() 호출
+                  "🔴 eval() 사용 - 코드 인젝션 위험
+                   🔴 SQL 인젝션 가능성
+                   🔴 하드코딩된 비밀번호"
+
+[CodeOptimizer]   "SELECT * 대신 필요한 컬럼만 조회.
+                   파라미터 바인딩으로 쿼리 최적화 가능."
+
+[Summarizer]      "## 종합 코드 리뷰
+                   심각도 상: eval() 제거, SQL 파라미터 바인딩
+                   심각도 상: 비밀번호 환경변수로 이동
+                   심각도 중: 관심사 분리 리팩토링
+                   REVIEW_COMPLETE"
+```
+
+---
+
+<!-- _class: section-divider -->
+<!-- _paginate: false -->
+<!-- _footer: "" -->
+
+# 14
+
+## 실전 팁과 베스트 프랙티스
+
+---
+
+# Agent 설계 베스트 프랙티스
+
+### 1. 역할을 명확하게
+
+```python
+# ❌ 모호한 설계
+agent = AssistantAgent("agent1", system_message="도움을 주세요.")
+
+# ✅ 명확한 역할 + 행동 지침
+agent = AssistantAgent(
+    "DataAnalyst",
+    description="수치 데이터를 분석하고 통계적 인사이트를 제공하는 에이전트.",
+    system_message="""당신은 데이터 분석 전문가입니다.
+    - 항상 수치적 근거를 포함하세요
+    - 분석 결과를 표 형식으로 정리하세요
+    - 불확실한 경우 추가 데이터를 요청하세요""",
+)
+```
+
+### 2. `description`은 Selector를 위한 것
+
+- `system_message`: Agent 자신이 읽는 행동 지침
+- `description`: SelectorGroupChat이 Agent를 **선택**할 때 참고하는 설명
+
+---
+
+# 흔한 실수와 해결법
+
+| 실수 | 증상 | 해결법 |
+| --- | --- | --- |
+| 종료 조건 누락 | 무한 루프, 비용 폭증 | `MaxMessageTermination` 항상 포함 |
+| Agent 수 과다 | 느린 응답, 비효율적 대화 | 2~4개 Agent로 시작 |
+| 모호한 역할 | Selector가 잘못된 Agent 선택 | `description` 구체적으로 작성 |
+| 도구 에러 미처리 | Agent가 오류에 대처 못함 | 문자열로 에러 반환 |
+| `reset()` 미호출 | 이전 대화가 누적 | 새 작업 시 `team.reset()` |
+
+---
+
+# Team 패턴 선택 가이드
+
+```
+작업의 성격은?
+    │
+    ├─ 순서가 정해진 반복 피드백 ──→  RoundRobinGroupChat
+    │   (Writer ↔ Critic)             - 예측 가능한 흐름
+    │                                  - 간단한 설정
+    │
+    ├─ 전문가 협업, 동적 선택 ──────→  SelectorGroupChat
+    │   (Planner + 전문가들)           - LLM 기반 라우팅
+    │                                  - 유연한 참여
+    │
+    └─ 워크플로우 기반, 분기 있음 ──→  Swarm
+        (고객 서비스, 주문 처리)        - 자율 핸드오프
+                                       - 사용자 개입 용이
+```
+
+---
+
+# 확장: Nested Chat (팀 안의 팀)
+
+복잡한 작업은 _팀 자체를 하나의 Agent처럼_ 중첩 가능
+
+```python
+# 내부 팀: Writer + Critic (에세이 작성)
+inner_team = RoundRobinGroupChat(
+    [writer, critic],
+    termination_condition=TextMentionTermination("APPROVE"),
+)
+
+# 외부 팀: Planner + 내부 팀 + Reviewer
+outer_team = SelectorGroupChat(
+    [planner, inner_team, final_reviewer],
+    model_client=model_client,
+    termination_condition=termination,
+)
+```
+
+> 하위 Team이 하나의 Agent처럼 동작하여 **계층적 구조** 구성 가능
 
 ---
 
 # 정리: AutoGen Multi-Agent 핵심 요소
 
-|     구성요소      | 역할               | AutoGen 구현                      |
-| :---------------: | ------------------ | --------------------------------- |
-|     **Agent**     | 자율적 작업 수행   | `AssistantAgent`                  |
-|     **Team**      | 에이전트 협업 구조 | `RoundRobin`, `Selector`, `Swarm` |
-|     **Tool**      | 외부 기능 확장     | Python 함수 + `tools=[]`          |
-|    **Handoff**    | 에이전트 간 위임   | `handoffs=[]` + `HandoffMessage`  |
-|  **Termination**  | 종료 조건 관리     | `TextMention`, `MaxMessage` 등    |
-| **Human-in-Loop** | 사람 개입          | `UserProxyAgent`                  |
+|     구성요소      | 역할               | AutoGen 구현                        |
+| :---------------: | ------------------ | ----------------------------------- |
+|     **Agent**     | 자율적 작업 수행   | `AssistantAgent`, `UserProxyAgent`  |
+|     **Team**      | 에이전트 협업 구조 | `RoundRobin`, `Selector`, `Swarm`   |
+|     **Tool**      | 외부 기능 확장     | Python 함수, `FunctionTool`         |
+|    **Handoff**    | 에이전트 간 위임   | `handoffs=[]` + `HandoffMessage`    |
+|  **Termination**  | 종료 조건 관리     | `TextMention`, `MaxMessage` 등      |
+| **Human-in-Loop** | 사람 개입          | `UserProxyAgent`, Swarm 핸드오프    |
+|    **State**      | 상태 저장/복원     | `save_state()` / `load_state()`     |
 
 ---
 
