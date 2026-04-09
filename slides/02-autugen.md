@@ -701,7 +701,6 @@ agent = AssistantAgent(
 | `False`   | 도구 결과를 **그대로** 메시지로 반환     |
 | `True`    | LLM이 도구 결과를 **자연어로 정리**하여 반환 |
 
-> `True`로 설정하면 LLM 호출이 1회 추가되지만, 사용자 친화적인 응답 생성
 
 ---
 
@@ -741,7 +740,6 @@ agent = AssistantAgent(
 import httpx
 
 async def search_web(query: str) -> str:
-    """웹에서 정보를 검색합니다."""
     async with httpx.AsyncClient() as client:
         resp = await client.get(
             "https://api.search.example.com/search",
@@ -754,7 +752,6 @@ async def query_database(sql: str) -> str:
     """읽기 전용 SQL 쿼리를 실행합니다. SELECT만 허용됩니다."""
     if not sql.strip().upper().startswith("SELECT"):
         return "오류: SELECT 쿼리만 허용됩니다."
-    # 실제 DB 연결 로직
     return f"쿼리 결과: [{sql}] 실행 완료 - 3건 조회"
 ```
 
@@ -771,14 +768,12 @@ async def query_database(sql: str) -> str:
 
 ```python
 searcher = AssistantAgent(
-    "Searcher",
-    tools=[search_web],
+    "Searcher", tools=[search_web],
     model_client=model_client,
     system_message="검색 전문가입니다.",
 )
 analyst = AssistantAgent(
-    "Analyst",
-    tools=[query_database, calculate],
+    "Analyst", tools=[query_database, calculate],
     model_client=model_client,
     system_message="데이터 분석가입니다.",
 )
@@ -834,7 +829,6 @@ async def translate(text: str, target_lang: str) -> str:
     """텍스트를 대상 언어로 번역합니다."""
     return f"[{target_lang}] {text} 번역 완료"
 
-# FunctionTool로 래핑 - 이름과 설명 커스터마이즈 가능
 translate_tool = FunctionTool(
     func=translate,
     name="translate_text",                       # 커스텀 이름
@@ -1017,32 +1011,25 @@ await Console(team.run_stream(task="바다를 주제로 4줄 시를 써줘"))
 
 # Human-in-the-Loop: Swarm에서의 사용자 핸드오프
 
-Swarm 패턴에서 _사용자 확인이 필요한 시점에 자동 핸드오프_
+Swarm 패턴에서 _사용자 확인이 필요한 시점에 자동 핸드오프_ -> 중요한 결정 전에 사용자 승인을 받아야함
 
 ```python
 from autogen_agentchat.agents import UserProxyAgent
 
 user = UserProxyAgent("user", input_func=input)
-
 order_agent = AssistantAgent(
-    "order_agent",
-    model_client=model_client,
+    "order_agent", model_client=model_client,
     handoffs=["payment_agent", "user"],    # 사용자에게도 핸드오프 가능
-    system_message="""주문을 처리합니다. 결제 전 반드시 user에게 핸드오프하여
-    주문 내용을 확인받으세요.""",
+    system_message="""주문을 처리합니다. 결제 전 반드시 user에게 핸드오프하여 주문 내용을 확인받으세요.""",
 )
 
 payment_agent = AssistantAgent(
-    "payment_agent",
-    model_client=model_client,
+    "payment_agent", model_client=model_client,
     handoffs=["order_agent", "user"],
     tools=[process_payment],
     system_message="결제를 처리합니다.",
 )
 ```
-
-> 중요한 결정(결제, 삭제 등) 전에 **사용자 승인**을 받는 안전한 패턴
-
 ---
 
 # Human-in-the-Loop 실행 흐름 (Swarm)
@@ -1250,6 +1237,12 @@ result = await Console(team2.run_stream(task="결론 부분을 보강해줘"))
 
 # Agent 단위 상태 저장/복원
 
+###
+###
+
+<div class="columns">
+<div>
+
 ```python
 # 개별 Agent의 상태도 독립적으로 저장 가능
 agent_state = await writer.save_state()
@@ -1262,6 +1255,8 @@ new_writer = AssistantAgent(
 )
 await new_writer.load_state(agent_state)
 ```
+</div>
+<div>
 
 ### 상태에 포함되는 것
 
@@ -1270,6 +1265,9 @@ await new_writer.load_state(agent_state)
 | 대화 히스토리 (메시지) | `model_client` 설정   |
 | 모델 컨텍스트         | 도구 함수 정의       |
 | 에이전트 내부 상태     | `system_message`     |
+
+</div>
+</div>
 
 > 복원 시 Agent 설정(model_client, tools, system_message)은 동일하게 생성해야 함
 
@@ -1320,7 +1318,6 @@ result = await team.run(task="보고서를 작성해줘")
 for msg in result.messages:
     print(f"[{msg.source}] {type(msg).__name__}: {msg.content[:80]}...")
 
-# 종료 사유 확인
 print(f"종료 사유: {result.stop_reason}")
 ```
 
@@ -1538,10 +1535,8 @@ asyncio.run(Console(team.run_stream(task=f"다음 코드를 리뷰해주세요:\
 ### 1. 역할을 명확하게
 
 ```python
-# ❌ 모호한 설계
-agent = AssistantAgent("agent1", system_message="도움을 주세요.")
+agent = AssistantAgent("agent1", system_message="도움을 주세요.") # ❌ 모호한 설계
 
-# ✅ 명확한 역할 + 행동 지침
 agent = AssistantAgent(
     "DataAnalyst",
     description="수치 데이터를 분석하고 통계적 인사이트를 제공하는 에이전트.",
@@ -1549,7 +1544,8 @@ agent = AssistantAgent(
     - 항상 수치적 근거를 포함하세요
     - 분석 결과를 표 형식으로 정리하세요
     - 불확실한 경우 추가 데이터를 요청하세요""",
-)
+) # ✅ 명확한 역할 + 행동 지침
+
 ```
 
 ### 2. `description`은 Selector를 위한 것
